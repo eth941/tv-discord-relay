@@ -1,67 +1,111 @@
-import discord
-import os
 import asyncio
-import yfinance as yf
+import os
+import re
 from datetime import datetime
 
-TOKEN      = os.environ.get("DISCORD_BOT_TOKEN")
+import discord
+import yfinance as yf
+
+TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 CHANNEL_ID = int(os.environ.get("ALERT_CHANNEL_ID"))
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-# { message_id: { "ticker": "NQ=F", "level": 24838.0, "direction": "bullish" } }
+# { message_id: { "ticker": "NQ1!", "yf_ticker": "NQ=F", "level": 24838.0, "direction": "bullish" } }
 active_levels = {}
 
+
 def tv_ticker_to_yf(ticker):
-    # Convert TradingView tickers to Yahoo Finance format
     mapping = {
-        "NQ1!":  "NQ=F",
-        "ES1!":  "ES=F",
+        "NQ1!": "NQ=F",
+        "ES1!": "ES=F",
         "MNQ1!": "MNQ=F",
         "MES1!": "MES=F",
-        "GC1!":  "GC=F",
-        "CL1!":  "CL=F",
+        "GC1!": "GC=F",
+        "CL1!": "CL=F",
     }
     return mapping.get(ticker, ticker)
+
 
 def get_current_price(yf_ticker):
     try:
         data = yf.Ticker(yf_ticker)
         price = data.fast_info.last_price
         return float(price) if price else None
-    except:
+    except Exception:
         return None
 
-def parse_detection(content):
+
+def direction_from_text(text):
+    t = (text or "").lower()
+    if "bullish" in t:
+        return "bullish"
+    if "bearish" in t:
+        return "bearish"
+    return None
+
+
+def parse_detection_text(content):
     # Format: "MOG 1H Bullish detected - NQ1! 24838"
     try:
-        parts     = content.split(" - ")
-        left      = parts[0].lower()
-        right     = parts[1].split(" ")
-        ticker    = right[0]
-        level     = float(right[1])
-        direction = "bullish" if "bullish" in left else "bearish" if "bearish" in left else None
+        parts = content.split(" - ", 1)
+        left = parts[0].lower()
+        right = parts[1].strip().split()
+        ticker = right[0].strip()
+        level = float(right[1])
+        direction = direction_from_text(left)
+        if not direction:
+            return None, None, None
         return ticker, level, direction
-    except:
+    except Exception:
         return None, None, None
 
-def is_detection(content):
-    c = content.lower()
+
+def parse_detection_embed(title, description):
+    # Title examples: "1H MOG Bullish", "15m ACOG Bearish"
+    # Description example: "**NQ1!** @ 24838"
+    t = (title or "").lower()
+    if "macog" in t:
+        return None, None, None
+    if "mog" not in t and "acog" not in t:
+        return None, None, None
+
+    direction = direction_from_text(t)
+    if not direction:
+        return None, None, None
+
+    d = (description or "").strip()
+    m = re.search(r"\*\*([^*]+)\*\*\s*@\s*(-?\d+(?:\.\d+)?)", d)
+    if not m:
+        m = re.search(r"([A-Z0-9!=.\-]+)\s*@\s*(-?\d+(?:\.\d+)?)", d)
+    if not m:
+        return None, None, None
+
+    ticker = m.group(1).strip()
+    level = float(m.group(2))
+    return ticker, level, direction
+
+
+def is_detection_text(content):
+    c = (content or "").lower()
     return ("detected" in c) and ("mog" in c or "acog" in c) and ("macog" not in c)
+
 
 def is_invalidated(level, current_price, direction):
     if direction == "bullish":
         return current_price >= level
-    elif direction == "bearish":
+    if direction == "bearish":
         return current_price <= level
     return False
+
 
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
     client.loop.create_task(price_check_loop())
+
 
 @client.event
 async def on_message(message):
@@ -70,33 +114,36 @@ async def on_message(message):
     if message.channel.id != CHANNEL_ID:
         return
 
-    content = message.content
+    ticker = level = direction = None
 
-    # Handle embed messages (from relay)
+    # Prefer embed parsing because relay posts embeds.
     if message.embeds:
         embed = message.embeds[0]
-        # Reconstruct content from embed title + description
-        title       = embed.title or ""
+        title = embed.title or ""
         description = embed.description or ""
-        content     = title + " - " + description
+        ticker, level, direction = parse_detection_embed(title, description)
 
-    if not is_detection(content):
-        return
+    # Fallback for raw text detections.
+    if ticker is None:
+        content = message.content or ""
+        if not is_detection_text(content):
+            return
+        ticker, level, direction = parse_detection_text(content)
 
-    ticker, level, direction = parse_detection(content)
-    if not ticker or not level or not direction:
+    if not ticker or level is None or not direction:
         return
 
     yf_ticker = tv_ticker_to_yf(ticker)
     active_levels[str(message.id)] = {
         "message_id": message.id,
-        "ticker":     ticker,
-        "yf_ticker":  yf_ticker,
-        "level":      level,
-        "direction":  direction,
-        "channel_id": message.channel.id
+        "ticker": ticker,
+        "yf_ticker": yf_ticker,
+        "level": float(level),
+        "direction": direction,
+        "channel_id": message.channel.id,
     }
     print(f"Tracking {direction} level {level} for {ticker} (msg {message.id})")
+
 
 async def price_check_loop():
     await client.wait_until_ready()
@@ -106,18 +153,20 @@ async def price_check_loop():
             price = get_current_price(data["yf_ticker"])
             if price is None:
                 continue
+
             if is_invalidated(data["level"], price, data["direction"]):
                 try:
                     channel = client.get_channel(data["channel_id"])
-                    msg     = await channel.fetch_message(data["message_id"])
+                    msg = await channel.fetch_message(data["message_id"])
                     await msg.delete()
+
                     direction_cap = data["direction"].capitalize()
-                    emoji = "📈" if data["direction"] == "bullish" else "📉"
+                    emoji = "BULL" if data["direction"] == "bullish" else "BEAR"
                     embed = discord.Embed(
-                        title       = f"❌ {data['ticker']} {direction_cap} Level Invalidated",
-                        description = f"{emoji} Price reached **{price}** — level **{data['level']}** invalidated",
-                        color       = discord.Color.dark_gray(),
-                        timestamp   = datetime.utcnow()
+                        title=f"INVALIDATED {data['ticker']} {direction_cap} Level",
+                        description=f"{emoji} Price reached **{price}** - level **{data['level']}** invalidated",
+                        color=discord.Color.dark_gray(),
+                        timestamp=datetime.utcnow(),
                     )
                     await channel.send(embed=embed)
                     to_delete.append(key)
@@ -129,6 +178,7 @@ async def price_check_loop():
         for key in to_delete:
             active_levels.pop(key, None)
 
-        await asyncio.sleep(10)  # check every 10 seconds
+        await asyncio.sleep(10)
+
 
 client.run(TOKEN)
