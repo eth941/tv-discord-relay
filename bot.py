@@ -1,5 +1,7 @@
 import discord
 import os
+import asyncio
+import yfinance as yf
 from datetime import datetime
 
 TOKEN      = os.environ.get("DISCORD_BOT_TOKEN")
@@ -9,61 +11,124 @@ intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-def get_direction(msg):
-    m = msg.lower()
-    if "bullish" in m:
-        return "bullish"
-    if "bearish" in m:
-        return "bearish"
-    return None
+# { message_id: { "ticker": "NQ=F", "level": 24838.0, "direction": "bullish" } }
+active_levels = {}
 
-def is_1h_mog(msg):
-    return "mog 1h" in msg.lower()
+def tv_ticker_to_yf(ticker):
+    # Convert TradingView tickers to Yahoo Finance format
+    mapping = {
+        "NQ1!":  "NQ=F",
+        "ES1!":  "ES=F",
+        "MNQ1!": "MNQ=F",
+        "MES1!": "MES=F",
+        "GC1!":  "GC=F",
+        "CL1!":  "CL=F",
+    }
+    return mapping.get(ticker, ticker)
 
-def is_15m_acog(msg):
-    return "acog 15m" in msg.lower()
+def get_current_price(yf_ticker):
+    try:
+        data = yf.Ticker(yf_ticker)
+        price = data.fast_info.last_price
+        return float(price) if price else None
+    except:
+        return None
+
+def parse_detection(content):
+    # Format: "MOG 1H Bullish detected - NQ1! 24838"
+    try:
+        parts     = content.split(" - ")
+        left      = parts[0].lower()
+        right     = parts[1].split(" ")
+        ticker    = right[0]
+        level     = float(right[1])
+        direction = "bullish" if "bullish" in left else "bearish" if "bearish" in left else None
+        return ticker, level, direction
+    except:
+        return None, None, None
+
+def is_detection(content):
+    c = content.lower()
+    return ("detected" in c) and ("mog" in c or "acog" in c) and ("macog" not in c)
+
+def is_invalidated(level, current_price, direction):
+    if direction == "bullish":
+        return current_price >= level
+    elif direction == "bearish":
+        return current_price <= level
+    return False
 
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
+    client.loop.create_task(price_check_loop())
 
 @client.event
 async def on_message(message):
-    if message.author.bot and message.channel.id == CHANNEL_ID:
-        content   = message.content
-        direction = get_direction(content)
+    if not message.author.bot:
+        return
+    if message.channel.id != CHANNEL_ID:
+        return
 
-        if not direction or not is_15m_acog(content):
-            return
+    content = message.content
 
-        # Scan back through channel history for most recent prior message
-        history = [m async for m in message.channel.history(limit=20, before=message)]
+    # Handle embed messages (from relay)
+    if message.embeds:
+        embed = message.embeds[0]
+        # Reconstruct content from embed title + description
+        title       = embed.title or ""
+        description = embed.description or ""
+        content     = title + " - " + description
 
-        for prior in history:
-            prior_content   = prior.content
-            prior_direction = get_direction(prior_content)
+    if not is_detection(content):
+        return
 
-            # Skip messages with no direction
-            if not prior_direction:
+    ticker, level, direction = parse_detection(content)
+    if not ticker or not level or not direction:
+        return
+
+    yf_ticker = tv_ticker_to_yf(ticker)
+    active_levels[str(message.id)] = {
+        "message_id": message.id,
+        "ticker":     ticker,
+        "yf_ticker":  yf_ticker,
+        "level":      level,
+        "direction":  direction,
+        "channel_id": message.channel.id
+    }
+    print(f"Tracking {direction} level {level} for {ticker} (msg {message.id})")
+
+async def price_check_loop():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        to_delete = []
+        for key, data in list(active_levels.items()):
+            price = get_current_price(data["yf_ticker"])
+            if price is None:
                 continue
+            if is_invalidated(data["level"], price, data["direction"]):
+                try:
+                    channel = client.get_channel(data["channel_id"])
+                    msg     = await channel.fetch_message(data["message_id"])
+                    await msg.delete()
+                    direction_cap = data["direction"].capitalize()
+                    emoji = "📈" if data["direction"] == "bullish" else "📉"
+                    embed = discord.Embed(
+                        title       = f"❌ {data['ticker']} {direction_cap} Level Invalidated",
+                        description = f"{emoji} Price reached **{price}** — level **{data['level']}** invalidated",
+                        color       = discord.Color.dark_gray(),
+                        timestamp   = datetime.utcnow()
+                    )
+                    await channel.send(embed=embed)
+                    to_delete.append(key)
+                    print(f"Invalidated {data['direction']} {data['level']} for {data['ticker']}")
+                except Exception as e:
+                    print(f"Error deleting message: {e}")
+                    to_delete.append(key)
 
-            # Found most recent directional message - check if it's a 1H MOG same direction
-            if is_1h_mog(prior_content) and prior_direction == direction:
-                channel = client.get_channel(CHANNEL_ID)
-                emoji   = "📈" if direction == "bullish" else "📉"
-                color   = discord.Color.green() if direction == "bullish" else discord.Color.red()
+        for key in to_delete:
+            active_levels.pop(key, None)
 
-                embed = discord.Embed(
-                    title       = f"🔥 MACOG {direction.capitalize()} Setup",
-                    description = f"{emoji} 1H MOG → 15m ACOG confirmed",
-                    color       = color,
-                    timestamp   = datetime.utcnow()
-                )
-                embed.add_field(name="Direction", value=direction.capitalize(), inline=True)
-                embed.add_field(name="Trigger",   value=content,               inline=False)
-                embed.add_field(name="1H MOG",    value=prior_content,         inline=False)
-
-                await channel.send(embed=embed)
-            break  # stop after first directional message regardless
+        await asyncio.sleep(10)  # check every 10 seconds
 
 client.run(TOKEN)
