@@ -138,6 +138,12 @@ def webhook():
     elif "prime zone starting no active gap" in msg_lower:
         send_discord_2(message, RED, "🔴 Prime Zone — No Active Gap")
         return "OK", 200
+    elif "prime lite zone starting with active gap" in msg_lower:
+        send_discord_2(message, GREEN, "🟢 Prime Lite Zone — Active Gap")
+        return "OK", 200
+    elif "prime lite zone starting no active gap" in msg_lower:
+        send_discord_2(message, RED, "🔴 Prime Lite Zone — No Active Gap")
+        return "OK", 200
     else:
         msg_id = send_discord(message, BLUE, "Alert")
         key = None
