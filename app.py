@@ -152,21 +152,7 @@ def webhook():
         message_ids[key] = msg_id
 
     # ── MACOG logic ───────────────────────────────────────────────────────────
-    if ticker and direction:
-        if "mog 1h" in msg_lower and "invalidated" not in msg_lower:
-            if ticker not in h1_mog_state:
-                h1_mog_state[ticker] = {}
-            h1_mog_state[ticker][direction] = now
-
-        elif "acog 15m" in msg_lower:
-            ticker_state = h1_mog_state.get(ticker, {})
-            h1_time      = ticker_state.get(direction)
-
-            if h1_time and (now - h1_time) <= timedelta(hours=MACOG_WINDOW_HOURS):
-                color = GREEN if direction == "bullish" else RED
-                send_discord(f"**{ticker}** @ {price}", ORANGE, f"🔥 MACOG {direction.capitalize()} Setup")
-
-    return "OK", 200
+    
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
