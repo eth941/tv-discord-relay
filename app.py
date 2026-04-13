@@ -7,9 +7,10 @@ app = Flask(__name__)
 
 DISCORD_WEBHOOK   = os.environ.get("DISCORD_WEBHOOK")
 DISCORD_WEBHOOK_2 = os.environ.get("DISCORD_WEBHOOK_2")
-DISCORD_WEBHOOK_3 = os.environ.get("DISCORD_WEBHOOK_3")
 MACOG_WINDOW_HOURS = 5
 
+# { "MOG 1H Bullish NQ1!": "discord_message_id" }
+message_ids = {}
 
 # { "NQ1!": {"bullish": datetime, "bearish": datetime} }
 h1_mog_state = {}
@@ -39,18 +40,15 @@ def send_discord_2(message, color, title):
         }]
     }
     requests.post(DISCORD_WEBHOOK_2, json=embed)
-def send_discord_3(message, color, title):
-    embed = {
-        "embeds": [{
-            "title": title,
-            "description": message,
-            "color": color,
-            "timestamp": datetime.utcnow().isoformat()
-        }]
-    }
-    requests.post(DISCORD_WEBHOOK_3, json=embed)
 
-
+def delete_discord_message(message_id):
+    # Extract webhook ID and token from URL
+    # URL format: https://discord.com/api/webhooks/{id}/{token}
+    parts = DISCORD_WEBHOOK.rstrip("/").split("/")
+    webhook_id    = parts[-2]
+    webhook_token = parts[-1]
+    url = f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}/messages/{message_id}"
+    requests.delete(url)
 
 def get_ticker(message):
     try:
@@ -90,7 +88,29 @@ def webhook():
     now       = datetime.utcnow()
     msg_lower = message.lower()
 
- 
+    # ── Invalidation — delete original message ────────────────────────────────
+    if "invalidated" in msg_lower:
+        # Build the key that was used when the original message was stored
+        if "mog 4h bullish" in msg_lower:
+            key = f"MOG 4H Bullish {ticker}"
+        elif "mog 4h bearish" in msg_lower:
+            key = f"MOG 4H Bearish {ticker}"
+        elif "mog 1h bullish" in msg_lower:
+            key = f"MOG 1H Bullish {ticker}"
+        elif "mog 1h bearish" in msg_lower:
+            key = f"MOG 1H Bearish {ticker}"
+        elif "acog 15m bullish" in msg_lower:
+            key = f"ACOG 15m Bullish {ticker}"
+        elif "acog 15m bearish" in msg_lower:
+            key = f"ACOG 15m Bearish {ticker}"
+        else:
+            key = None
+
+        if key and key in message_ids:
+            delete_discord_message(message_ids.pop(key))
+
+        return "OK", 200
+
     # ── Detection — send embed and store message ID ───────────────────────────
     msg_id = None
 
@@ -123,12 +143,6 @@ def webhook():
         return "OK", 200
     elif "prime lite zone starting no active gap" in msg_lower:
         send_discord_2(message, RED, "🔴 Prime Lite Zone — No Active Gap")
-        return "OK", 200
-    elif "moab: bullish 1h fvg tap" in msg_lower:
-        send_discord_3(f"**{ticker}** @ {price}", GREEN, "📈 MOAB Bullish 1H FVG Tap")
-        return "OK", 200
-    elif "moab: bearish 1h fvg tap" in msg_lower:
-        send_discord_3(f"**{ticker}** @ {price}", RED, "📉 MOAB Bearish 1H FVG Tap")
         return "OK", 200
     else:
         msg_id = send_discord(message, BLUE, "Alert")
