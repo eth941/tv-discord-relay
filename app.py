@@ -7,6 +7,7 @@ app = Flask(__name__)
 
 DISCORD_WEBHOOK   = os.environ.get("DISCORD_WEBHOOK")
 DISCORD_WEBHOOK_2 = os.environ.get("DISCORD_WEBHOOK_2")
+DISCORD_WEBHOOK_3 = os.environ.get("DISCORD_WEBHOOK_3")
 MACOG_WINDOW_HOURS = 5
 
 # { "MOG 1H Bullish NQ1!": "discord_message_id" }
@@ -40,6 +41,17 @@ def send_discord_2(message, color, title):
         }]
     }
     requests.post(DISCORD_WEBHOOK_2, json=embed)
+
+def send_discord_3(message, color, title):
+    embed = {
+        "embeds": [{
+            "title": title,
+            "description": message,
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat()
+        }]
+    }
+    requests.post(DISCORD_WEBHOOK_3, json=embed)
 
 def delete_discord_message(message_id):
     # Extract webhook ID and token from URL
@@ -143,6 +155,12 @@ def webhook():
         return "OK", 200
     elif "prime lite zone starting no active gap" in msg_lower:
         send_discord_2(message, RED, "🔴 Prime Lite Zone — No Active Gap")
+        return "OK", 200
+    elif "moab: bullish 1h fvg tap" in msg_lower:
+        send_discord_3(f"**{ticker}** @ {price}", GREEN, "📈 MOAB Bullish 1H FVG Tap")
+        return "OK", 200
+    elif "moab: bearish 1h fvg tap" in msg_lower:
+        send_discord_3(f"**{ticker}** @ {price}", RED, "📉 MOAB Bearish 1H FVG Tap")
         return "OK", 200
     else:
         msg_id = send_discord(message, BLUE, "Alert")
