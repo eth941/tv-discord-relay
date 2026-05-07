@@ -43,22 +43,6 @@ def get_price(message):
         return ""
 
 
-def get_moab_ticker(message):
-    """For format: 'MOAB: bullish 1H FVG tap on TICKER at PRICE'"""
-    try:
-        return message.split(" on ")[1].split(" at ")[0].strip()
-    except Exception:
-        return "N/A"
-
-
-def get_moab_price(message):
-    """For format: 'MOAB: bullish 1H FVG tap on TICKER at PRICE'"""
-    try:
-        return message.split(" at ")[1].strip()
-    except Exception:
-        return ""
-
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     message = request.get_data(as_text=True).strip()
@@ -98,13 +82,13 @@ def webhook():
 
     # ── Webhook 3 — MOAB ──────────────────────────────────────────────────────
     elif "moab: bullish 1h fvg tap" in msg_lower:
-        ticker = get_moab_ticker(message)
-        price  = get_moab_price(message)
+        ticker = get_ticker(message)
+        price  = get_price(message)
         post_embed(DISCORD_WEBHOOK_3, "📈 MOAB Bullish 1H FVG Tap", f"**{ticker}** @ {price}", GREEN)
 
     elif "moab: bearish 1h fvg tap" in msg_lower:
-        ticker = get_moab_ticker(message)
-        price  = get_moab_price(message)
+        ticker = get_ticker(message)
+        price  = get_price(message)
         post_embed(DISCORD_WEBHOOK_3, "📉 MOAB Bearish 1H FVG Tap", f"**{ticker}** @ {price}", RED)
 
     # ── Fallback ──────────────────────────────────────────────────────────────
